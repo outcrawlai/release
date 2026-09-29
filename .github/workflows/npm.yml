@@ -1,12 +1,15 @@
-# Publishes the npm tarballs attached to a release of this repository.
+# Publishes the npm tarball attached to a release of this repository.
 #
 # Authentication is npm trusted publishing (OIDC): no npm token exists
-# anywhere. npm trusts exactly this repository + this workflow filename for
-# @outcrawl/sdk and @outcrawl/mcp, so renaming this file breaks publishing.
+# anywhere. npm trusts exactly this repository + this workflow filename, so
+# renaming this file breaks publishing.
 #
-# The tarballs are built and tested in the private source repository by
-# scripts/release-npm.sh, which attaches them here with SHA256SUMS and creates
-# the release. This job only verifies the checksums and publishes; a version
+# ONLY @outcrawl/sdk is ever published. The Outcrawl MCP is hosted only and its
+# npm package is deprecated; any other package name fails the run.
+#
+# The tarball is built in the private source repository by
+# scripts/publish-npm.sh, which attaches it here with SHA256SUMS and creates
+# the release. This job only verifies the checksum and publishes; a version
 # that is already on npm is skipped, so re-running a release is safe.
 name: npm
 
@@ -62,6 +65,7 @@ jobs:
           [ "${#tarballs[@]}" -gt 0 ] || { echo "::error::release has no .tgz"; exit 1; }
           for tgz in "${tarballs[@]}"; do
             name=$(tar -xzOf "$tgz" package/package.json | jq -r .name)
+            [ "$name" = "@outcrawl/sdk" ] || { echo "::error::${name} is not publishable from here (only @outcrawl/sdk)"; exit 1; }
             version=$(tar -xzOf "$tgz" package/package.json | jq -r .version)
             if npm view "${name}@${version}" version >/dev/null 2>&1; then
               echo "${name}@${version} is already on npm; skipped"
