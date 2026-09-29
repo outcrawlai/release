@@ -1,0 +1,72 @@
+# Publishes the npm tarballs attached to a release of this repository.
+#
+# Authentication is npm trusted publishing (OIDC): no npm token exists
+# anywhere. npm trusts exactly this repository + this workflow filename for
+# @outcrawl/sdk and @outcrawl/mcp, so renaming this file breaks publishing.
+#
+# The tarballs are built and tested in the private source repository by
+# scripts/release-npm.sh, which attaches them here with SHA256SUMS and creates
+# the release. This job only verifies the checksums and publishes; a version
+# that is already on npm is skipped, so re-running a release is safe.
+name: npm
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - name: npm with trusted publishing
+        run: npm install --global npm@^11.15.0 && npm --version
+
+      - name: Download and verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
+          cd dist
+          sha256sum --check --strict SHA256SUMS
+          # Every tarball must be covered by SHA256SUMS.
+          for tgz in *.tgz; do
+            grep -q "  ${tgz}\$" SHA256SUMS || { echo "::error::${tgz} is not in SHA256SUMS"; exit 1; }
+          done
+
+      - name: Publish
+        env:
+          # The source repository is private; provenance would name this
+          # repository instead, so it is off.
+          NPM_CONFIG_PROVENANCE: 'false'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd dist
+          tarballs=(*.tgz)
+          [ "${#tarballs[@]}" -gt 0 ] || { echo "::error::release has no .tgz"; exit 1; }
+          for tgz in "${tarballs[@]}"; do
+            name=$(tar -xzOf "$tgz" package/package.json | jq -r .name)
+            version=$(tar -xzOf "$tgz" package/package.json | jq -r .version)
+            if npm view "${name}@${version}" version >/dev/null 2>&1; then
+              echo "${name}@${version} is already on npm; skipped"
+              continue
+            fi
+            npm publish "./${tgz}" --access public
+            echo "published ${name}@${version}"
+          done
